@@ -122,6 +122,22 @@ Vérifié : `docker exec web touch /var/www/html/x` et `docker exec db touch /et
 
 Tout le reste est exclu par défaut (`*`) : un nouveau fichier (`.env`, secret, note...) ne peut pas entrer dans l'image par oubli, et le contexte de build reste minimal.
 
+## CI/CD et publication
+
+Pipeline GitHub Actions : `.github/workflows/docker.yml`.
+
+| Étape | Déclenchement | Détail |
+|---|---|---|
+| Build | `push` et `pull_request` sur `main` | `docker compose build`, avec `.env` et secrets d'exemple |
+| Lint PHP | idem | `php82 -l` sur chaque fichier, exécuté dans l'image construite (même PHP qu'en production) |
+| Test fonctionnel | idem | Stack démarrée avec `--wait` (healthchecks), affichage de la page, ajout d'un article puis vérification qu'il apparaît |
+| Connexion Docker Hub | `push` uniquement | `docker/login-action` avec les secrets GitHub `DOCKERHUB_USERNAME` et `DOCKERHUB_TOKEN` (jeton d'accès, pas le mot de passe) |
+| Publication | `push` uniquement | `<user>/articles-web` et `<user>/articles-db`, tags `latest` et SHA du commit |
+
+- Les images publiées sont celles qui viennent de passer les tests : elles sont seulement re-taguées, pas reconstruites.
+- Pas de publication sur `pull_request` : une PR ne doit pas écraser `latest`, et les PR venant de forks n'ont pas accès aux secrets.
+- Le tag SHA rend chaque version traçable jusqu'à son commit et permet un retour arrière précis ; `latest` suit `main`.
+
 ## Schéma
 
 ```mermaid

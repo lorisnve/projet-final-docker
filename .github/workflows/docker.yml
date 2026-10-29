@@ -1,0 +1,71 @@
+name: Docker CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v4
+
+      - name: Configuration de test (.env et secrets d'exemple)
+        run: |
+          cp .env.example .env
+          cp secrets/db_password.txt.example secrets/db_password.txt
+          cp secrets/db_root_password.txt.example secrets/db_root_password.txt
+
+      - name: Build des images
+        run: docker compose build
+
+      - name: Lint PHP (dans l'image construite)
+        run: |
+          docker run --rm --entrypoint sh articles-web:latest \
+            -c 'for f in /var/www/html/*.php; do php82 -l "$f" || exit 1; done'
+
+      - name: Démarrage de la stack
+        run: docker compose up -d --wait --wait-timeout 180
+
+      - name: Test fonctionnel (affichage + ajout d'un article)
+        run: |
+          curl -fsS http://localhost:8080/ > /dev/null
+          curl -fsS -o /dev/null -X POST \
+            -d "title=ci-${GITHUB_SHA::7}&author=ci&content=test" \
+            http://localhost:8080/validation.php
+          curl -fsS http://localhost:8080/ | grep -q "ci-${GITHUB_SHA::7}"
+
+      - name: Logs en cas d'échec
+        if: failure()
+        run: docker compose logs
+
+      - name: Arrêt de la stack
+        if: always()
+        run: docker compose down -v
+
+      # Publication uniquement sur main : les PR (forks) n'ont pas accès aux secrets
+      - name: Connexion à Docker Hub
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Tag et push (latest + SHA)
+        if: github.event_name == 'push'
+        env:
+          REGISTRY_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          for svc in web db; do
+            for tag in latest "$GITHUB_SHA"; do
+              docker tag "articles-$svc:latest" "$REGISTRY_USER/articles-$svc:$tag"
+              docker push "$REGISTRY_USER/articles-$svc:$tag"
+            done
+          done

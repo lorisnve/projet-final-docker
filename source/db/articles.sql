@@ -1,10 +1,4 @@
-CREATE DATABASE IF NOT EXISTS test CHARACTER SET utf8;
-CREATE USER IF NOT EXISTS 'test'@'localhost' IDENTIFIED BY 'test';
-GRANT ALL PRIVILEGES ON test.* TO 'test'@'localhost';
-
-
-USE test;
-
+-- Base et utilisateur créés par l'image mysql (MYSQL_DATABASE / MYSQL_USER)
 CREATE TABLE IF NOT EXISTS articles (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     title VARCHAR(100) NOT NULL,

@@ -5,6 +5,8 @@ RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends iputils-ping \
  && docker-php-ext-install mysqli pdo_mysql \
+ # Outils de compilation inutiles au runtime (et porteurs de CVE : linux-libc-dev, gcc...)
+ && apt-get purge -y --auto-remove $PHPIZE_DEPS libc6-dev \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 

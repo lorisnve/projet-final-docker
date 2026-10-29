@@ -55,6 +55,48 @@ Adminer ou phpMyAdmin (optionnels) ne sont pas retenus : un service de plus, c'e
 | `WEB_PORT`, `DB_HOST`, `DB_PORT`, `MYSQL_DATABASE`, `MYSQL_USER` | `.env` | Non (`.env.example` oui) |
 | Mot de passe root et mot de passe applicatif | Secrets Docker (`secrets/*.txt`) | Non (`.example` oui) |
 
+## Sécurité
+
+### Scan de vulnérabilités (Trivy)
+
+Commande : `docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --severity HIGH,CRITICAL <image>`
+
+| Image | Avant (HIGH / CRITICAL) | Après (HIGH / CRITICAL) |
+|---|---|---|
+| `articles-web` (Debian 13) | 117 / 3 | 58 / 1 |
+| `articles-db` (Oracle Linux 9) | 33 / 2 | 0 / 0 |
+
+| Vulnérabilité CRITICAL | Correction |
+|---|---|
+| CVE-2026-93221, CVE-2026-99083 (`linux-libc-dev`, web) | Outils de compilation (`$PHPIZE_DEPS`, `libc6-dev`) purgés après `docker-php-ext-install` : inutiles au runtime |
+| GHSA-6q48-6c7w-9gw2 (`certifi`, Python, db) | Suppression de `mysql-shell`, client non utilisé par le serveur |
+| CVE-2025-68121 (Go `stdlib` dans `gosu`, db) | Suppression de `gosu` : le conteneur démarre directement en `USER mysql` |
+| CVE-2026-6653 (`libxml2`, web) | **Risque accepté** : aucun correctif publié par Debian, bibliothèque requise par PHP et Apache. `apt-get upgrade` au build l'appliquera dès sa sortie |
+
+### Gestion des secrets
+
+- Mots de passe transmis par secrets Docker, montés en fichiers dans `/run/secrets/` (variables `*_PASSWORD_FILE`) : ils n'apparaissent ni dans les Dockerfiles, ni dans les couches d'image, ni dans `docker inspect`.
+- L'appli lit le mot de passe via `DB_PASSWORD_FILE` dans `db-config.php` ; hôte, base et utilisateur viennent du `.env`.
+- `.env` et `secrets/*.txt` sont exclus par `.gitignore` et `.dockerignore`.
+
+### Limitation des privilèges
+
+| Mesure | `web` | `db` | Effet |
+|---|---|---|---|
+| `USER` non-root | `www-data` | `mysql` | Une compromission ne donne pas root dans le conteneur |
+| Port non privilégié | 8080 | 3306 | Aucune capability nécessaire pour écouter |
+| `read_only: true` | Oui (`tmpfs` : `/tmp`, `/var/run/apache2`, `/var/lock/apache2`) | Oui (`tmpfs` : `/tmp`, `/var/run/mysqld`) | Impossible de modifier le code ou de déposer un binaire |
+| `cap_drop: [ALL]` | Oui | Oui | Aucune capability Linux (ni `CHOWN`, ni `NET_RAW`, ni `SETUID`...) |
+| `no-new-privileges` | Oui | Oui | Bloque l'élévation via binaires setuid |
+
+Vérifié : `docker exec web touch /var/www/html/x` et `docker exec db touch /etc/x` renvoient `Read-only file system`.
+
+### Application
+
+- `display_errors` forcé à `1` dans le code supprimé : les erreurs (chemins, DSN) ne s'affichent plus, elles sont journalisées (`php-hardening.ini`).
+- Sorties échappées avec `htmlspecialchars` dans `index.php` (correction d'une XSS stockée).
+- Apache et PHP ne divulguent plus leur version (`ServerTokens Prod`, `expose_php = Off`).
+
 ## Schéma
 
 ```mermaid

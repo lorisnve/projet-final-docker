@@ -53,8 +53,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-      - /var/run/apache2
-      - /var/lock/apache2
+      # uid/gid de l'utilisateur apache (Alpine) : le tmpfs est sinon propriété de root
+      - /run/apache2:uid=100,gid=101
     cap_drop:
       - ALL
     security_opt:

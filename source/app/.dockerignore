@@ -1,8 +1,4 @@
-.git
-.gitignore
-.env
-secrets
-*.md
-Dockerfile
-.dockerignore
-docker-compose*.yml
+# Liste blanche : seuls le code PHP et la config sont envoyés au build
+*
+!*.php
+!docker/

@@ -14,7 +14,7 @@
 
 | Service | Image de base | Rôle | Port |
 |---|---|---|---|
-| `web` | `php:8.2-apache` | Sert l'appli PHP | 8080 (hôte) → 8080 (conteneur) |
+| `web` | `alpine:3.22` + Apache + PHP 8.2 | Sert l'appli PHP | 8080 (hôte) → 8080 (conteneur) |
 | `db` | `mysql:8` | Stocke les articles | 3306, interne uniquement |
 
 Adminer ou phpMyAdmin (optionnels) ne sont pas retenus : un service de plus, c'est une surface d'attaque de plus, et il n'est pas utile pour la démonstration.
@@ -35,7 +35,7 @@ Adminer ou phpMyAdmin (optionnels) ne sont pas retenus : un service de plus, c'e
 | `docker exec -it web curl http://db:3306` | `curl: (1) Received HTTP/0.9 when not allowed` | Le port 3306 est joignable : MySQL répond avec son handshake binaire, que curl refuse car ce n'est pas du HTTP. C'est le résultat attendu |
 | `docker run --rm alpine ping db` | `ping: bad address 'db'` | Un conteneur hors du réseau ne peut ni résoudre ni joindre `db` |
 
-`ping` n'existe pas dans `php:8.2-apache` : le paquet `iputils-ping` est ajouté dans le Dockerfile de `web`.
+`ping` est fourni par BusyBox dans l'image Alpine, `curl` est installé explicitement (aussi utilisé par le healthcheck).
 
 ### Isolation et intérêt du bridge personnalisé
 
@@ -61,17 +61,17 @@ Adminer ou phpMyAdmin (optionnels) ne sont pas retenus : un service de plus, c'e
 
 Commande : `docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --severity HIGH,CRITICAL <image>`
 
-| Image | Avant (HIGH / CRITICAL) | Après (HIGH / CRITICAL) |
-|---|---|---|
-| `articles-web` (Debian 13) | 117 / 3 | 58 / 1 |
-| `articles-db` (Oracle Linux 9) | 33 / 2 | 0 / 0 |
+| Image | Initial (HIGH / CRITICAL) | Après corrections | Après passage sur Alpine (partie 6) |
+|---|---|---|---|
+| `articles-web` | 117 / 3 (Debian 13) | 58 / 1 | **0 / 0** (Alpine 3.22) |
+| `articles-db` (Oracle Linux 9) | 33 / 2 | 0 / 0 | 0 / 0 |
 
 | Vulnérabilité CRITICAL | Correction |
 |---|---|
 | CVE-2026-93221, CVE-2026-99083 (`linux-libc-dev`, web) | Outils de compilation (`$PHPIZE_DEPS`, `libc6-dev`) purgés après `docker-php-ext-install` : inutiles au runtime |
 | GHSA-6q48-6c7w-9gw2 (`certifi`, Python, db) | Suppression de `mysql-shell`, client non utilisé par le serveur |
 | CVE-2025-68121 (Go `stdlib` dans `gosu`, db) | Suppression de `gosu` : le conteneur démarre directement en `USER mysql` |
-| CVE-2026-6653 (`libxml2`, web) | **Risque accepté** : aucun correctif publié par Debian, bibliothèque requise par PHP et Apache. `apt-get upgrade` au build l'appliquera dès sa sortie |
+| CVE-2026-6653 (`libxml2`, web) | Aucun correctif Debian publié : disparue avec le passage sur Alpine (partie 6) |
 
 ### Gestion des secrets
 
@@ -83,9 +83,9 @@ Commande : `docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec
 
 | Mesure | `web` | `db` | Effet |
 |---|---|---|---|
-| `USER` non-root | `www-data` | `mysql` | Une compromission ne donne pas root dans le conteneur |
+| `USER` non-root | `apache` (uid 100) | `mysql` | Une compromission ne donne pas root dans le conteneur |
 | Port non privilégié | 8080 | 3306 | Aucune capability nécessaire pour écouter |
-| `read_only: true` | Oui (`tmpfs` : `/tmp`, `/var/run/apache2`, `/var/lock/apache2`) | Oui (`tmpfs` : `/tmp`, `/var/run/mysqld`) | Impossible de modifier le code ou de déposer un binaire |
+| `read_only: true` | Oui (`tmpfs` : `/tmp`, `/run/apache2` monté en uid 100 pour le PID d'Apache) | Oui (`tmpfs` : `/tmp`, `/var/run/mysqld`) | Impossible de modifier le code ou de déposer un binaire |
 | `cap_drop: [ALL]` | Oui | Oui | Aucune capability Linux (ni `CHOWN`, ni `NET_RAW`, ni `SETUID`...) |
 | `no-new-privileges` | Oui | Oui | Bloque l'élévation via binaires setuid |
 
@@ -97,13 +97,38 @@ Vérifié : `docker exec web touch /var/www/html/x` et `docker exec db touch /et
 - Sorties échappées avec `htmlspecialchars` dans `index.php` (correction d'une XSS stockée).
 - Apache et PHP ne divulguent plus leur version (`ServerTokens Prod`, `expose_php = Off`).
 
+## Optimisation des images
+
+### Tailles
+
+| Image | Avant | Après | Gain |
+|---|---|---|---|
+| `articles-web` | 710 Mo (`php:8.2-apache`, Debian) | **47,4 Mo** (`alpine:3.22`) | -93 % |
+| `articles-db` | 1,12 Go (`mysql:8.4`) | 1,12 Go | Image officielle conservée |
+
+### Choix
+
+- **Base Alpine pour `web`** : `php:8.2-apache` embarque une Debian complète et les outils de compilation (`gcc`, en-têtes...) dans ses couches de base. Les purger dans une couche suivante ne réduit pas la taille, les couches étant empilées. Alpine fournit Apache, PHP 8.2 et les extensions `mysqli`/`pdo_mysql` en paquets précompilés : rien à compiler, donc aucun outil de build dans l'image.
+- **Une seule couche d'installation** : `apk upgrade` et `apk add --no-cache` dans un même `RUN`, sans cache d'index APK.
+- **Pas de multi-stage build** : l'appli n'a aucune étape de compilation (PHP interprété, Bootstrap chargé par CDN). Avec Alpine, les extensions ne sont plus compilées non plus : un stage de build ne retirerait rien de l'image finale.
+- **`db` reste sur `mysql:8.4`** : `mariadb:11.4` (455 Mo) aurait été plus légère, mais les fichiers de données MySQL 8.4 ne sont pas compatibles et la migration imposait de réinitialiser le volume. Il n'existe pas d'image MySQL officielle Alpine. Supprimer des paquets dans une couche suivante ne réduit pas la taille ; seuls `mysql-shell` et `gosu` sont retirés, pour la sécurité (partie 5).
+
+### `.dockerignore` en liste blanche
+
+| Contexte | Fichiers envoyés au build |
+|---|---|
+| `source/app` | `*.php` et `docker/` uniquement |
+| `source/db` | `articles.sql` uniquement |
+
+Tout le reste est exclu par défaut (`*`) : un nouveau fichier (`.env`, secret, note...) ne peut pas entrer dans l'image par oubli, et le contexte de build reste minimal.
+
 ## Schéma
 
 ```mermaid
 flowchart LR
     U[Navigateur] -->|HTTP :8080| W
     subgraph N[app-network - bridge]
-        W[web<br/>php:8.2-apache<br/>utilisateur non-root]
+        W[web<br/>alpine + Apache + PHP 8.2<br/>utilisateur non-root]
         D[(db<br/>mysql:8)]
         W -->|db:3306| D
     end

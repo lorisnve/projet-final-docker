@@ -1,33 +1,30 @@
-FROM php:8.2-apache
+FROM alpine:3.22
 
-# Extensions PHP, correctifs de sécurité Debian, puis nettoyage des couches
-RUN apt-get update \
- && apt-get upgrade -y --no-install-recommends \
- && apt-get install -y --no-install-recommends iputils-ping \
- && docker-php-ext-install mysqli pdo_mysql \
- # Outils de compilation inutiles au runtime (et porteurs de CVE : linux-libc-dev, gcc...)
- && apt-get purge -y --auto-remove $PHPIZE_DEPS libc6-dev \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
+# Apache + PHP 8.2 précompilés : aucune compilation, donc aucun outil de build dans l'image
+RUN apk upgrade --no-cache \
+ && apk add --no-cache apache2 php82 php82-apache2 php82-mysqli php82-pdo_mysql curl
 
-# php.ini de production + durcissement
-RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
-COPY docker/php-hardening.ini $PHP_INI_DIR/conf.d/99-hardening.ini
+COPY docker/php-hardening.ini /etc/php82/conf.d/99-hardening.ini
+COPY docker/apache-hardening.conf /etc/apache2/conf.d/zz-hardening.conf
 
-# Apache : port non privilégié (8080), configuration durcie,
-# droits d'écriture limités aux dossiers runtime
-COPY docker/apache-hardening.conf /etc/apache2/conf-available/zz-hardening.conf
-RUN sed -ri 's/^Listen 80$/Listen 8080/' /etc/apache2/ports.conf \
- && sed -ri 's/<VirtualHost \*:80>/<VirtualHost *:8080>/' /etc/apache2/sites-available/000-default.conf \
- && a2enconf zz-hardening \
- && chown -R www-data:www-data /var/run/apache2 /var/lock/apache2
+# Port non privilégié, DocumentRoot standard, logs vers stdout/stderr (rootfs en lecture seule)
+RUN sed -ri \
+      -e 's/^Listen 80$/Listen 8080/' \
+      -e 's#/var/www/localhost/htdocs#/var/www/html#g' \
+      -e 's#^ErrorLog .*#ErrorLog /dev/stderr#' \
+      -e 's#^(\s*)CustomLog .*#\1CustomLog /dev/stdout combined#' \
+      /etc/apache2/httpd.conf \
+ && mkdir -p /var/www/html \
+ && chown apache:apache /run/apache2
 
-# Code applicatif : lecture seule pour www-data (propriétaire root)
+# Code applicatif : lecture seule pour apache (propriétaire root)
 COPY *.php /var/www/html/
 
 EXPOSE 8080
 
-USER www-data
+USER apache
+
+CMD ["httpd", "-D", "FOREGROUND"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -fsS http://localhost:8080/ || exit 1

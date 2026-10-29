@@ -25,6 +25,25 @@ Adminer ou phpMyAdmin (optionnels) ne sont pas retenus : un service de plus, c'e
 - `web` joint `db` par son nom de service (résolution DNS interne de Docker).
 - `db` n'est pas publié sur l'hôte : seule `web` peut l'atteindre.
 
+### Vérifications
+
+| Commande | Résultat obtenu | Ce que ça montre |
+|---|---|---|
+| `docker network ls` | `articles_app-network` (driver `bridge`) à côté de `bridge`, `host`, `none` | Compose crée un réseau dédié, préfixé par le nom du projet |
+| `docker network inspect articles_app-network` | Sous-réseau `172.18.0.0/16`, `db=172.18.0.2`, `web=172.18.0.3` | Seuls les deux conteneurs du projet y sont rattachés |
+| `docker exec -it web ping db` | `64 bytes from db.articles_app-network (172.18.0.2)` | Le nom de service `db` est résolu par le DNS interne de Docker (`127.0.0.11`) |
+| `docker exec -it web curl http://db:3306` | `curl: (1) Received HTTP/0.9 when not allowed` | Le port 3306 est joignable : MySQL répond avec son handshake binaire, que curl refuse car ce n'est pas du HTTP. C'est le résultat attendu |
+| `docker run --rm alpine ping db` | `ping: bad address 'db'` | Un conteneur hors du réseau ne peut ni résoudre ni joindre `db` |
+
+`ping` n'existe pas dans `php:8.2-apache` : le paquet `iputils-ping` est ajouté dans le Dockerfile de `web`.
+
+### Isolation et intérêt du bridge personnalisé
+
+- **Résolution DNS par nom de service** : sur le `bridge` par défaut, les conteneurs ne se joignent que par IP (qui change à chaque recréation). Sur un bridge personnalisé, `DB_HOST=db` suffit et reste stable.
+- **Isolation** : seuls les conteneurs explicitement attachés à `app-network` peuvent communiquer avec `db`. Les autres conteneurs de la machine (réseau `bridge` ou autres projets) ne le voient pas.
+- **Exposition minimale** : `db` n'a pas de section `ports`, donc 3306 n'est accessible ni depuis l'hôte ni depuis l'extérieur. Seul `web` publie un port (8080).
+- **Cloisonnement par projet** : chaque stack Compose a son propre réseau, ce qui évite les collisions de noms et les accès croisés entre projets.
+
 ## Volumes
 
 - `db-data` : volume nommé monté sur `/var/lib/mysql`. Les données survivent à `docker compose down`.

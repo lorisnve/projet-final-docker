@@ -3,6 +3,7 @@ FROM php:8.2-apache
 # Extensions PHP, correctifs de sécurité Debian, puis nettoyage des couches
 RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends iputils-ping \
  && docker-php-ext-install mysqli pdo_mysql \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*

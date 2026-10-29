@@ -1,5 +1,4 @@
 FROM php:8.2-apache
-FROM mysql:8.4
 
 # Extensions PHP, correctifs de sécurité Debian, puis nettoyage des couches
 RUN apt-get update \

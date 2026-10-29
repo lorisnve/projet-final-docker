@@ -1,0 +1,9 @@
+# Configuration locale et secrets : ne jamais commiter
+.env
+secrets/*
+!secrets/*.example
+
+# Divers
+.DS_Store
+.idea/
+.vscode/
